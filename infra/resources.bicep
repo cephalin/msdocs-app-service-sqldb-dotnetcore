@@ -16,6 +16,13 @@ resource virtualNetwork 'Microsoft.Network/virtualNetworks@2024-01-01' = {
     }
     subnets: [
       {
+        name: 'cache-subnet'
+        properties: {
+          addressPrefix: '10.0.0.0/24'
+          privateEndpointNetworkPolicies: 'Disabled'
+        }
+      }
+      {
         name: 'webapp-subnet'
         properties: {
           addressPrefix: '10.0.1.0/24'
@@ -53,6 +60,9 @@ resource virtualNetwork 'Microsoft.Network/virtualNetworks@2024-01-01' = {
   }
   resource subnetForApp 'subnets' existing = {
     name: 'webapp-subnet'
+  }
+  resource subnetForCache 'subnets' existing = {
+    name: 'cache-subnet'
   }
 }
 
@@ -153,7 +163,57 @@ resource privateDnsZoneDB 'Microsoft.Network/privateDnsZones@2020-06-01' = {
   }
 }
 
-// The Key Vault is used to manage the SQL database connection string.
+// Resources needed to secure Azure Managed Redis behind a private endpoint
+resource cachePrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-04-01' = {
+  name: '${appName}-cache-privateEndpoint'
+  location: location
+  properties: {
+    subnet: {
+      id: virtualNetwork::subnetForCache.id
+    }
+    privateLinkServiceConnections: [
+      {
+        name: '${appName}-cache-privateEndpoint'
+        properties: {
+          privateLinkServiceId: redisCache.id
+          groupIds: ['redisEnterprise']
+        }
+      }
+    ]
+  }
+  resource privateDnsZoneGroup 'privateDnsZoneGroups' = {
+    name: 'default'
+    properties: {
+      privateDnsZoneConfigs: [
+        {
+          name: 'cache-config'
+          properties: {
+            privateDnsZoneId: privateDnsZoneCache.id
+          }
+        }
+      ]
+    }
+  }
+}
+resource privateDnsZoneCache 'Microsoft.Network/privateDnsZones@2020-06-01' = {
+  name: 'privatelink.redis.azure.net'
+  location: 'global'
+  dependsOn: [
+    virtualNetwork
+  ]
+  resource privateDnsZoneLinkCache 'virtualNetworkLinks@2020-06-01' = {
+    name: '${appName}-cachelink'
+    location: 'global'
+    properties: {
+      virtualNetwork: {
+        id: virtualNetwork.id
+      }
+      registrationEnabled: false
+    }
+  }  
+}
+
+// The Key Vault is used to manage SQL database and Azure Managed Redis secrets.
 // Current user has the admin permissions to configure key vault secrets, but by default doesn't have the permissions to read them.
 resource keyVault 'Microsoft.KeyVault/vaults@2022-07-01' = {
   name: '${take(replace(appName, '-', ''), 17)}-vault'
@@ -207,6 +267,27 @@ resource dbserver 'Microsoft.Sql/servers@2023-05-01-preview' = {
       capacity: 1
     }
   }  
+}
+
+// Azure Managed Redis is configured to the minimum pricing tier
+resource redisCache 'Microsoft.Cache/redisEnterprise@2026-05-01-preview' = {
+  name: '${appName}-cache'
+  location: location
+  sku: {
+    name: 'Balanced_B0'
+  }
+  properties: {
+    minimumTlsVersion: '1.2'
+    publicNetworkAccess: 'Disabled'
+  }
+
+  // Azure Managed Redis authentication
+  resource redisDatabase 'databases@2026-05-01-preview' = {
+    name: 'default'
+    properties: {
+      accessKeysAuthentication: 'Enabled'
+    }
+  }
 }
 
 // The App Service plan is configured to the B1 pricing tier
@@ -288,7 +369,8 @@ resource web 'Microsoft.Web/sites@2022-09-01' = {
 }
 
 // Service Connector from the app to the key vault, which generates the connection settings for the App Service app
-// The application code doesn't make any direct connections to the key vault, but the setup expedites managed identity access.
+// The application code doesn't make any direct connections to the key vault, but the setup expedites the managed identity access
+// so that the cache connector can be configured with key vault references.
 resource vaultConnector 'Microsoft.ServiceLinker/linkers@2024-04-01' = {
   scope: web
   name: 'vaultConnector'
@@ -335,6 +417,31 @@ resource dbConnector 'Microsoft.ServiceLinker/linkers@2024-04-01' = {
       type: 'privateLink'
     }
   }
+}
+
+// Service Connector from the app to the cache, which generates an app setting for the ASP.NET Core application
+resource cacheConnector 'Microsoft.ServiceLinker/linkers@2024-04-01' = {
+  scope: web
+  name: 'RedisConnector'
+  properties: {
+    clientType: 'dotnet'
+    targetService: {
+      type: 'AzureResource'
+      id: redisCache::redisDatabase.id
+    }
+    authInfo: {
+      authType: 'accessKey' // Configure secrets as key vault references. No secret is exposed in App Service.
+    }
+    secretStore: {
+      keyVaultId: keyVault.id
+    }
+    vNetSolution: {
+      type: 'privateLink'
+    }
+  }
+  dependsOn: [
+    cachePrivateEndpoint
+  ]
 }
 
 resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
@@ -394,7 +501,7 @@ resource webdiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-previe
 
 output WEB_URI string = 'https://${web.properties.defaultHostName}'
 
-output CONNECTION_SETTINGS array = map(concat(dbConnector.listConfigurations().configurations, vaultConnector.listConfigurations().configurations), config => config.name)
+output CONNECTION_SETTINGS array = map(concat(dbConnector.listConfigurations().configurations, cacheConnector.listConfigurations().configurations, vaultConnector.listConfigurations().configurations), config => config.name)
 output WEB_APP_LOG_STREAM string = format('https://portal.azure.com/#@/resource{0}/logStream', web.id)
 output WEB_APP_SSH string = format('https://{0}.scm.azurewebsites.net/webssh/host', web.name)
 output WEB_APP_CONNECTIONSTRINGS string = format('https://portal.azure.com/#@/resource{0}/connectionStrings', web.id)
