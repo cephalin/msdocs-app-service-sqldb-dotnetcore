@@ -7,7 +7,7 @@ starter_ref="${2:-upstream/starter-no-infra}"
 
 allowed_difference() {
     case "$1" in
-        DotNetCoreSqlDb.csproj|Program.cs|README.md|azure.yaml|infra/*)
+        Program.cs|README.md|azure.yaml|infra/*)
             return 0
             ;;
         *)
