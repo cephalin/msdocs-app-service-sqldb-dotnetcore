@@ -34,6 +34,7 @@ This project has a [dev container configuration](.devcontainer/), which makes it
 1. In the codespace terminal, run the following commands:
 
     ```shell
+    dotnet restore
     dotnet ef database update
     dotnet run
     ```
@@ -77,7 +78,7 @@ The [AZD template](infra/resources.bicep) in this repo secures the database in a
 Because the Linux .NET container in App Service doesn't come with the .NET SDK, you cannot run the migrations command `dotnet ef database update` easily. However, you can upload a [self-contained migrations bundle](https://learn.microsoft.com/ef/core/managing-schemas/migrations/applying?tabs=dotnet-core-cli#bundles). This repo automates the deployment of the migrations bundle as follows:
 
 - In [azure.yaml](azure.yaml), use the `prepackage` hook to generate a *migrationsbundle* file with `dotnet ef migrations bundle`.
-- In the [.csproj](DotNretCoreSqlDb.csproj) file, include the generated *migrationsbundle* file. During the `azd package` stage, *migrationsbundle* will be added to the deploy package.
+- In the [.csproj](DotNetCoreSqlDb.csproj) file, include the generated *migrationsbundle* file. During the `azd package` stage, *migrationsbundle* will be added to the deploy package.
 - In [infra/resources.bicep](infra/resources.bicep), add the `appCommandLine` property to the web app to run the uploaded *migrationsbundle*.
 
 ## How does the AZD template configure passwords?
