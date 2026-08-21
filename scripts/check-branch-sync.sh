@@ -17,11 +17,20 @@ allowed_difference() {
 }
 
 unexpected=()
+if ! diff_paths="$(git diff --name-only "$main_ref" "$starter_ref")"; then
+    printf 'Failed to diff refs: %s and %s\n' "$main_ref" "$starter_ref" >&2
+    exit 1
+fi
+
 while IFS= read -r path; do
+    if [[ -z "$path" ]]; then
+        continue
+    fi
+
     if ! allowed_difference "$path"; then
         unexpected+=("$path")
     fi
-done < <(git diff --name-only "$main_ref" "$starter_ref")
+done <<< "$diff_paths"
 
 if ((${#unexpected[@]} > 0)); then
     printf 'Unexpected branch differences:\n' >&2
