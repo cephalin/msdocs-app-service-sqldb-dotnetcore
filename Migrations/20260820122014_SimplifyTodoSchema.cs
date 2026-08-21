@@ -15,6 +15,8 @@ namespace DotNetCoreSqlDb.Migrations
                 name: "CreatedDate",
                 table: "Todo");
 
+            migrationBuilder.Sql("UPDATE [Todo] SET [Description] = N'' WHERE [Description] IS NULL;");
+
             migrationBuilder.AlterColumn<string>(
                 name: "Description",
                 table: "Todo",
